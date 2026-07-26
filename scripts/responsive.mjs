@@ -80,15 +80,18 @@ for (const v of VIEWPORTS) {
     t('no cell content painted over the next column', collide===null,
       collide?`col ${collide.col} spills ${collide.spill}px ("${collide.text}")`:'clean');
 
-    // and it must actually be truncating, not just fitting by luck
-    const truncated = await p.evaluate(()=>{
-      const links=[...document.querySelectorAll('table tbody tr td:first-child a')];
-      return links.filter(a=>a.scrollWidth>a.clientWidth+1).length;
+    // The clamp must be in force. Asserting that clamping is *currently
+    // happening* would be brittle: given two lines, every Signify description
+    // happens to fit at these widths — which is the desired outcome, not a
+    // failure. What matters is that an over-long one would be contained.
+    const clamp = await p.evaluate(()=>{
+      const a=document.querySelector('table tbody tr td:first-child a');
+      if (!a) return null;
+      const cs=getComputedStyle(a);
+      return {lines:cs.webkitLineClamp, overflow:cs.overflow};
     });
-    // At >=1400px the description column is wide enough that nothing needs
-    // clipping, so absence of ellipsis there is correct, not a failure.
-    if (v.w < 1400) t('long descriptions are ellipsised', truncated>0, `${truncated} clipped links`);
-    else t('descriptions fit without clipping at this width', truncated===0, `${truncated} clipped`);
+    t('description cell clamps to 2 lines',
+      clamp?.lines==='2' && clamp.overflow==='hidden', JSON.stringify(clamp));
 
     const cols = await p.locator('table thead th').allTextContents();
     t('column set matches width', v.w>=1200
@@ -119,9 +122,12 @@ for (const v of VIEWPORTS) {
       return Math.round(worst);
     });
     t('row content stays inside the row', spill<=2, `${spill}px spill`);
-    // hamburger present
-    const burger = await p.locator('button[aria-controls], button[aria-label*="avigation" i], button[aria-label*="menu" i]').count();
+    // Nav drawer and content layout share the 1024px breakpoint, so wherever
+    // rows are used the hamburger must be there too.
+    const burger = await p.locator('button[aria-label*="avigation" i], button[aria-label*="menu" i], header button[aria-expanded]').count();
     t('mobile nav toggle present', burger>0, `${burger} candidate(s)`);
+    const sidebarVisible = await p.locator('nav a[href="/vendors"]').first().isVisible().catch(()=>false);
+    t('side nav is not taking content width', !sidebarVisible, sidebarVisible?'sidebar visible':'collapsed to drawer');
   }
 
   // sparklines render at every width (SSR-safe inline svg now)

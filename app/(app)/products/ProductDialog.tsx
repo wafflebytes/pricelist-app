@@ -8,7 +8,7 @@ import {TextInput} from '@astryxdesign/core/TextInput';
 import {Selector} from '@astryxdesign/core/Selector';
 import {Button} from '@astryxdesign/core/Button';
 import {Banner} from '@astryxdesign/core/Banner';
-import {HStack, VStack, StackItem} from '@astryxdesign/core/Layout';
+import {HStack, VStack, StackItem, Stack} from '@astryxdesign/core/Layout';
 import {Text} from '@astryxdesign/core/Text';
 import {List} from '@astryxdesign/core/List';
 import {Item} from '@astryxdesign/core/Item';
@@ -33,6 +33,7 @@ export function ProductDialog({
   vendors,
   product,
   existing = [],
+  onUseExisting,
   onSaved,
 }: {
   /** Always true in practice: the parent mounts this only while open. */
@@ -46,6 +47,11 @@ export function ProductDialog({
    * merge anything — identity stays exact-match (PRD §2.5).
    */
   existing?: Array<{id: string; description: string; product_code: string | null}>;
+  /**
+   * Invoked when the user picks one of the similar products instead of creating
+   * a new one — hands off to the price-entry flow without losing their place.
+   */
+  onUseExisting?: (productId: string) => void;
   onSaved: (createdId?: string) => void | Promise<void>;
 }) {
   const router = useRouter();
@@ -112,7 +118,7 @@ export function ProductDialog({
   }
 
   return (
-    <Dialog isOpen={isOpen} onOpenChange={open => !open && onClose()} purpose="form" width={520}>
+    <Dialog isOpen={isOpen} onOpenChange={open => !open && onClose()} purpose="info" width={520}>
       <DialogHeader
         title={isEdit ? 'Edit product' : 'Add product'}
         subtitle={
@@ -162,30 +168,44 @@ export function ProductDialog({
             />
 
             {suggestions.length > 0 ? (
+              // Bounded and scrollable: an unbounded list pushed the dialog past
+              // its own height. And nothing here navigates — a suggestion used
+              // to open that product's page, silently discarding whatever had
+              // been typed. Each row now offers the action you actually wanted,
+              // which is to price the existing product instead of duplicating it.
               <VStack gap={1}>
                 <Text type="supporting">
                   {looksLikeDuplicate
-                    ? 'Did you mean one of these?'
+                    ? 'This may already exist'
                     : 'Existing products that look similar'}
                 </Text>
-                <List hasDividers density="compact">
-                  {suggestions.map(match => (
-                    <Item
-                      key={match.id}
-                      as="li"
-                      label={match.description}
-                      labelLines={2}
-                      description={match.product_code ?? 'No product code'}
-                      onClick={() => {
-                        onClose();
-                        router.push(`/products/${match.id}`);
-                      }}
-                    />
-                  ))}
-                </List>
+                <Stack style={{maxHeight: 164, overflowY: 'auto'}}>
+                  <List hasDividers density="compact">
+                    {suggestions.map(match => (
+                      <Item
+                        key={match.id}
+                        as="li"
+                        label={match.description}
+                        labelLines={1}
+                        description={match.product_code ?? 'No product code'}
+                        endContent={
+                          onUseExisting ? (
+                            <Button
+                              label="Use this"
+                              variant="ghost"
+                              size="sm"
+                              tooltip="Add a price entry for this product instead"
+                              onClick={() => onUseExisting(match.id)}
+                            />
+                          ) : undefined
+                        }
+                      />
+                    ))}
+                  </List>
+                </Stack>
                 <Text type="supporting" color="secondary">
                   Different wattage or colour temperature means a different
-                  product — add it as new if none of these are it.
+                  product — carry on adding it if none of these are it.
                 </Text>
               </VStack>
             ) : null}

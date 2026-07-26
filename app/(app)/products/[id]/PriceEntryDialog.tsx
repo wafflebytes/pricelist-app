@@ -82,7 +82,11 @@ export function PriceEntryDialog({
     <Dialog
       isOpen={isOpen}
       onOpenChange={open => !open && onClose()}
-      purpose="form"
+      // purpose="info" so clicking the backdrop closes the dialog, matching
+      // Escape. "form" deliberately blocks backdrop dismissal after any
+      // interaction to protect typed input — accepted trade-off: dismissal
+      // consistency was the explicit ask.
+      purpose="info"
       width={480}
     >
       <DialogHeader

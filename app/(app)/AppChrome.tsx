@@ -22,9 +22,13 @@ import {getClient} from '@/lib/supabase/client';
 
 /**
  * Responsive contract for the frame:
- *   > 768px  side nav 260 (collapsible, resizable) | content
- *   <= 768px side nav becomes the AppShell mobile drawer with a hamburger
- *            toggle; the drawer closes itself on navigation
+ *   >= 1024px side nav 260 (collapsible, resizable) | content
+ *   <  1024px side nav becomes the AppShell mobile drawer with a hamburger
+ *             toggle; the drawer closes itself on navigation
+ *
+ * The breakpoint is raised from AppShell's default 'md' (768) to 'lg' (1024) so
+ * the frame and the page switch together: the product table gives way to rows
+ * at 1024, and at 834 a 260px sidebar would leave those rows only ~574px.
  */
 export function AppChrome({
   children,
@@ -48,6 +52,7 @@ export function AppChrome({
     <AppShell
       height="fill"
       contentPadding={0}
+      mobileNav={{breakpoint: 'lg'}}
       sideNav={
         <SideNav
           collapsible

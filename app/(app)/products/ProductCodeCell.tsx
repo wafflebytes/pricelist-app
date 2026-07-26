@@ -14,6 +14,10 @@ import {updateProduct} from '@/lib/actions';
  * data-entry chore the app creates — no code exists anywhere in the source
  * ledger (PRD §2.7), so all 195 start empty and someone has to work through
  * them. Everything else about a product edits via the dialog.
+ *
+ * No `tooltip` on these buttons: one Tooltip per row put 50 fixed-position
+ * nodes in the table, and hovering into it made Chrome drop the next wheel
+ * event. The labels ("Add code", or the code itself) already say what they do.
  */
 export function ProductCodeCell({
   productId,
@@ -56,7 +60,6 @@ export function ProductCodeCell({
         label={code}
         variant="ghost"
         size="sm"
-        tooltip="Edit product code"
         onClick={() => {
           setDraft(code);
           setIsEditing(true);
@@ -69,7 +72,6 @@ export function ProductCodeCell({
         label="Add code"
         variant="ghost"
         size="sm"
-        tooltip="No product code set"
         onClick={() => {
           setDraft('');
           setIsEditing(true);

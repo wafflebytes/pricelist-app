@@ -255,8 +255,9 @@ t('add-product dialog opened', await pdlg.count()>0);
 await pdlg.getByLabel('Description').fill('rc370b led36s');
 await page.waitForTimeout(700);
 const sugg = await pdlg.textContent();
-t('typing surfaces similar existing products', /look similar|Did you mean/.test(sugg ?? ''),
-  (sugg??'').match(/(Did you mean[^]{0,20}|look similar)/)?.[0] ?? 'none');
+t('typing surfaces similar existing products',
+  /look similar|may already exist/.test(sugg ?? ''),
+  (sugg??'').match(/(may already exist|look similar)/)?.[0] ?? 'none');
 t('suggestion list is populated', (await pdlg.locator('li').count())>0,
   `${await pdlg.locator('li').count()} suggestion(s)`);
 await page.screenshot({path:'.verify/15-fuzzy-suggestions.png'});

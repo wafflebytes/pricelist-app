@@ -13,3 +13,36 @@
 @import '@astryxdesign/core/reset.css';
 @import '@astryxdesign/core/astryx.css';
 @import '@astryxdesign/theme-neutral/theme.css';
+
+/*
+ * The one hand-written rule in this project, and the reason for it:
+ *
+ * Table wraps itself in `.astryx-table-scroll-wrapper` with `overflow: auto` on
+ * BOTH axes. Our table is sized to its columns and never needs to scroll
+ * vertically, but the wrapper is still a scroll container — so Chrome latches
+ * the first wheel event to it and only chains to the real scroller on the
+ * second. The symptom is that the first scroll over the table does nothing and
+ * you have to scroll again.
+ *
+ * StyleX sets only `overflow-x: auto` on it, and `overflow-y: visible` alone is
+ * not enough: CSS forces `visible` to compute as `auto` whenever the other axis
+ * scrolls, so the element stays a scroll container. `clip` has no such side
+ * effect and is not a scroll container, so the pair below genuinely removes the
+ * wrapper from the vertical scroll chain and the first wheel event lands.
+ *
+ * Clipping horizontally is safe here because the table is proven to fit its
+ * container at every width where it is used — scripts/responsive.mjs asserts
+ * `scrollWidth <= clientWidth` at 1024/1280/1600, and below 1024 the table is
+ * replaced by rows. If a second vendor ever widens the column set, restore a
+ * horizontal scroller here deliberately rather than by accident.
+ *
+ * `defineTheme`'s `components` map is the documented way to override these
+ * classes, but those overrides are compiled by `astryx theme build` into a
+ * stylesheet rather than applied at runtime — a whole build step for two
+ * structural properties. No colour, spacing or type is set here; those still
+ * come from tokens only.
+ */
+.astryx-table-scroll-wrapper {
+  overflow-x: clip;
+  overflow-y: visible;
+}

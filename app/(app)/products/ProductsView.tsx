@@ -19,7 +19,6 @@ import {Banner} from '@astryxdesign/core/Banner';
 import {Pagination} from '@astryxdesign/core/Pagination';
 import {EmptyState} from '@astryxdesign/core/EmptyState';
 import {TextInput} from '@astryxdesign/core/TextInput';
-import {Tooltip} from '@astryxdesign/core/Tooltip';
 import {ToggleButton, ToggleButtonGroup} from '@astryxdesign/core/ToggleButton';
 import {Link} from '@astryxdesign/core/Link';
 import {useMediaQuery} from '@astryxdesign/core/hooks';
@@ -34,17 +33,10 @@ import {
   pixel,
 } from '@astryxdesign/core/Table';
 import type {TableColumn} from '@astryxdesign/core/Table';
-import {PlusIcon, TableCellsIcon} from '@heroicons/react/24/outline';
+import {PlusIcon, TableCellsIcon, CubeIcon} from '@heroicons/react/24/outline';
 
 import type {ProductSummary, Vendor} from '@/lib/types';
-import {
-  inr,
-  pct,
-  formatDate,
-  relativeDays,
-  daysSince,
-  STALE_DAYS,
-} from '@/lib/format';
+import {inr, pct, formatDate, daysSince, STALE_DAYS} from '@/lib/format';
 import {getClient} from '@/lib/supabase/client';
 import {useHasMounted} from '@/lib/useHasMounted';
 import {fuzzyScoreAny} from '@/lib/fuzzy';
@@ -52,6 +44,7 @@ import {Sparkline} from '@/components/Sparkline';
 import {ProductCodeCell} from './ProductCodeCell';
 import {ProductRows} from './ProductRows';
 import {ProductDialog} from './ProductDialog';
+import {NewEntryDialog} from './NewEntryDialog';
 
 const PAGE_SIZE = 50;
 
@@ -123,6 +116,9 @@ export function ProductsView({
     {sortKey: 'last_purchase_date', direction: 'descending'},
   ]);
   const [page, setPage] = useState(1);
+  // Recording a price is the daily job; creating a product is the rare
+  // consequence of it. The primary action reflects that.
+  const [isEntryDialogOpen, setIsEntryDialogOpen] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -292,24 +288,27 @@ export function ProductsView({
         sortable: true,
         // A ghost Button was wrong here: buttons size to their content, so a
         // 45-character Signify description overflowed the column and collided
-        // with the next cell.
+        // with the next cell. Link's own `maxLines` does not help either: it
+        // clamps the inner Text while the anchor stays inline-flex with
+        // overflow:visible, so the clamp box just grows.
         //
-        // Link's own `maxLines` does not help either: it clamps the inner Text,
-        // but the anchor itself renders as inline-flex with overflow:visible, so
-        // the clamp box just grows with the content. The `<td>` is already
-        // overflow:hidden / white-space:nowrap under table-layout:fixed, so the
-        // anchor only needs to become a block that participates in that
-        // clipping. Structural properties only — no colour, size or spacing here.
+        // Two lines rather than one, and deliberately no tooltip. A per-cell
+        // Tooltip put 152 fixed-position nodes in a 50-row table, and hovering
+        // into it made Chrome drop the next wheel event — the "I have to scroll
+        // twice" bug. Two lines also show more of the string than a tooltip
+        // ever did, and the full text is on the detail page one click away.
+        // Structural properties only; no colour, size or spacing here.
         renderCell: (row: ProductSummary) => (
           <Link
             as={NextLink}
             href={`/products/${row.product_id}`}
-            tooltip={row.description}
             style={{
-              display: 'block',
+              display: '-webkit-box',
+              WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 2,
               minWidth: 0,
               overflow: 'hidden',
-              textOverflow: 'ellipsis',
+              whiteSpace: 'normal',
             }}
           >
             {row.description}
@@ -370,14 +369,13 @@ export function ProductsView({
         header: 'Last purchased',
         width: pixel(150),
         sortable: true,
-        renderCell: (row: ProductSummary) =>
-          hasMounted ? (
-            <Tooltip content={relativeDays(row.last_purchase_date)}>
-              <Text type="body">{formatDate(row.last_purchase_date)}</Text>
-            </Tooltip>
-          ) : (
-            <Text type="body">{formatDate(row.last_purchase_date)}</Text>
-          ),
+        // Also tooltip-free, for the same reason. The absolute date is the
+        // useful value; "how stale is this" is what the Stale chip answers.
+        renderCell: (row: ProductSummary) => (
+          <Text type="body" hasTabularNumbers>
+            {formatDate(row.last_purchase_date)}
+          </Text>
+        ),
       },
       {
         key: 'entry_count',
@@ -410,7 +408,7 @@ export function ProductsView({
     return isWide
       ? cols
       : cols.filter(c => c.key !== 'entry_count' && c.key !== 'product_code');
-  }, [showVendor, load, hasMounted, isWide]);
+  }, [showVendor, load, isWide]);
 
   const columnResize = useTableColumnResize<ProductSummary>({
     columnWidths,
@@ -448,15 +446,26 @@ export function ProductsView({
                   </Text>
                 </VStack>
               </StackItem>
-              <Button
-                label="Add product"
-                variant="primary"
-                // Icon-only on narrow screens: the title already says
-                // "Products", so the word is redundant and the space is not.
-                isIconOnly={!isTableLayout}
-                icon={<PlusIcon width={16} height={16} />}
-                onClick={() => setIsDialogOpen(true)}
-              />
+              <HStack gap={2}>
+                <Button
+                  label="Add product"
+                  variant="secondary"
+                  // Icon-only on narrow screens, where the label costs more
+                  // room than it earns.
+                  isIconOnly={!isTableLayout}
+                  icon={<CubeIcon width={16} height={16} />}
+                  tooltip="Add a product that does not exist yet"
+                  onClick={() => setIsDialogOpen(true)}
+                />
+                <Button
+                  label="New price entry"
+                  variant="primary"
+                  isIconOnly={!isTableLayout}
+                  icon={<PlusIcon width={16} height={16} />}
+                  tooltip="Record what was paid for a product"
+                  onClick={() => setIsEntryDialogOpen(true)}
+                />
+              </HStack>
             </HStack>
 
             {/* The toolbar stacks below the table breakpoint and its controls
@@ -547,6 +556,7 @@ export function ProductsView({
                     onClick={() => setIsDialogOpen(true)}
                   />
                 )
+
               }
             />
           ) : isTableLayout ? (
@@ -582,6 +592,19 @@ export function ProductsView({
         ) : undefined
       }
       />
+      {isEntryDialogOpen ? (
+        <NewEntryDialog
+          isOpen
+          products={rows}
+          onClose={() => setIsEntryDialogOpen(false)}
+          onSaved={load}
+          onCreateProduct={() => {
+            setIsEntryDialogOpen(false);
+            setIsDialogOpen(true);
+          }}
+        />
+      ) : null}
+
       {isDialogOpen ? (
         <ProductDialog
           isOpen
@@ -592,6 +615,12 @@ export function ProductsView({
             description: r.description,
             product_code: r.product_code,
           }))}
+          onUseExisting={() => {
+            // They meant to price something that already exists — send them to
+            // the entry flow rather than to a read-only product page.
+            setIsDialogOpen(false);
+            setIsEntryDialogOpen(true);
+          }}
           onSaved={async id => {
             await load();
             if (id) router.push(`/products/${id}`);
