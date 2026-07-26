@@ -20,7 +20,7 @@ const admin = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SECRET
   console.log(`pre-clean: ${(coded??[]).length} code(s), ${(junk??[]).length} entry(ies) reset\n`);
 }
 
-const BASE='http://localhost:3000';
+const BASE=process.env.SMOKE_BASE_URL ?? 'http://localhost:3000';
 mkdirSync('.verify', {recursive:true});
 let fails=0;
 const t=(label,ok,extra='')=>{console.log(`  ${ok?'✓':'✗'} ${label}${extra?' — '+extra:''}`); if(!ok)fails++; return ok;};
@@ -97,8 +97,12 @@ await page.waitForTimeout(300);
 const codeInput = page.locator('table input').first();
 await codeInput.fill('AAL-TEST-1');
 await codeInput.press('Enter');
-await page.waitForTimeout(2500);
-t('inline code saved and visible', (await page.textContent('body')).includes('AAL-TEST-1'));
+// Wait for the value rather than a fixed sleep: a server action plus a
+// summary refetch is materially slower against production than localhost.
+const savedOk = await page.waitForFunction(
+  () => document.body.innerText.includes('AAL-TEST-1'), null, {timeout:20000},
+).then(()=>true).catch(()=>false);
+t('inline code saved and visible', savedOk);
 await page.screenshot({path:'.verify/3-inline-code.png'});
 
 // duplicate code should error by name
@@ -107,7 +111,9 @@ await page.waitForTimeout(300);
 const dup = page.locator('table input').first();
 await dup.fill('AAL-TEST-1');
 await dup.press('Enter');
-await page.waitForTimeout(2500);
+await page.waitForFunction(
+  () => /already used by/i.test(document.body.innerText), null, {timeout:20000},
+).catch(()=>{});
 const dupMsg = await page.textContent('body');
 t('duplicate code rejected, names the conflict', /already used by/i.test(dupMsg), (dupMsg.match(/Product code .{0,60}/)||[])[0]);
 await page.screenshot({path:'.verify/4-dup-code-error.png'});

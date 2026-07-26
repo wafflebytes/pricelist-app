@@ -35,6 +35,7 @@ import {PlusIcon, PencilSquareIcon, TrashIcon} from '@heroicons/react/24/outline
 import type {Product, ProductEntryRow, Vendor} from '@/lib/types';
 import {inr, qty, pct, formatDate, relativeDays} from '@/lib/format';
 import {getClient} from '@/lib/supabase/client';
+import {useHasMounted} from '@/lib/useHasMounted';
 import {deletePriceEntry} from '@/lib/actions';
 import {ProductDialog} from '../ProductDialog';
 import {PriceEntryDialog} from './PriceEntryDialog';
@@ -81,6 +82,10 @@ export function ProductDetail({
   >(null);
   const [pendingDelete, setPendingDelete] = useState<ProductEntryRow | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // See lib/useHasMounted: relative dates are client-only to avoid a
+  // UTC-server vs IST-browser hydration mismatch.
+  const hasMounted = useHasMounted();
 
   const rangeKey = `${range?.start ?? ''}|${range?.end ?? ''}`;
 
@@ -449,7 +454,7 @@ export function ProductDetail({
                 label="Entries"
                 value={String(stats?.count ?? 0)}
                 hint={
-                  stats?.lastDate
+                  hasMounted && stats?.lastDate
                     ? `last ${relativeDays(stats.lastDate)}`
                     : undefined
                 }

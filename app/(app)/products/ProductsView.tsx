@@ -44,6 +44,7 @@ import {
   STALE_DAYS,
 } from '@/lib/format';
 import {getClient} from '@/lib/supabase/client';
+import {useHasMounted} from '@/lib/useHasMounted';
 import {Sparkline} from '@/components/Sparkline';
 import {ProductCodeCell} from './ProductCodeCell';
 import {ProductDialog} from './ProductDialog';
@@ -103,6 +104,10 @@ export function ProductsView({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [liveNotice, setLiveNotice] = useState<string | null>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+
+  // Relative dates depend on "now", which differs between the UTC server and
+  // an IST browser. They are rendered only after hydration.
+  const hasMounted = useHasMounted();
 
   // Only surface the vendor column once a second vendor actually exists
   // (PRD §10) — the field is modelled and stored either way.
@@ -194,6 +199,9 @@ export function ProductsView({
         if (chip === 'uncoded' && r.product_code) return false;
         if (chip === 'single' && r.entry_count !== 1) return false;
         if (chip === 'stale') {
+          // Only reachable after hydration (a chip must be clicked), but the
+          // guard keeps "now" out of the server render for certain.
+          if (!hasMounted) return false;
           const age = daysSince(r.last_purchase_date);
           if (age === null || age <= STALE_DAYS) return false;
         }
@@ -202,7 +210,7 @@ export function ProductsView({
       }
       return true;
     });
-  }, [rows, search, chips, showVendor]);
+  }, [rows, search, chips, showVendor, hasMounted]);
 
   // -------------------------------------------------------------------- sort
   const sorted = useMemo(() => {
@@ -303,11 +311,14 @@ export function ProductsView({
         header: 'Last purchased',
         width: pixel(150),
         sortable: true,
-        renderCell: (row: ProductSummary) => (
-          <Tooltip content={relativeDays(row.last_purchase_date)}>
+        renderCell: (row: ProductSummary) =>
+          hasMounted ? (
+            <Tooltip content={relativeDays(row.last_purchase_date)}>
+              <Text type="body">{formatDate(row.last_purchase_date)}</Text>
+            </Tooltip>
+          ) : (
             <Text type="body">{formatDate(row.last_purchase_date)}</Text>
-          </Tooltip>
-        ),
+          ),
       },
       {
         key: 'entry_count',
@@ -328,7 +339,7 @@ export function ProductsView({
     );
 
     return cols;
-  }, [showVendor, router, load]);
+  }, [showVendor, router, load, hasMounted]);
 
   const columnResize = useTableColumnResize<ProductSummary>({
     columnWidths,
