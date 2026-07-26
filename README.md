@@ -1,0 +1,177 @@
+# Aalino Price List
+
+Internal price list and vendor price-history tool for **Aalino India Pvt. Ltd.**, a distributor of commercial electrical products.
+
+Aalino receives periodic Tally ledger exports from its vendors. Every unit price it has ever paid is in those files, buried inside voucher structure. This app turns them into a product master with per-product price history: a dense sortable table of every product with an inline price sparkline, drill-in detail views with a full price-history chart, and manual add/edit of products, internal product codes, and one-off price entries. Multi-user, invite-only, live-syncing.
+
+It is a **price intelligence tool, not an accounting tool** — no GST, no invoices, no ledger reconciliation.
+
+Built to `PRD.md` (see [Deviations](#deviations-from-the-prd)).
+
+---
+
+## Stack
+
+| Layer | Choice |
+|---|---|
+| Frontend | Next.js 16 (App Router, Turbopack) |
+| Design system | [Astryx](https://github.com/facebook/astryx) — `@astryxdesign/core`, `theme-neutral`, `charts`. Light mode only |
+| Backend | Supabase — Postgres, Auth, Realtime |
+| Hosting | Vercel |
+
+### A note on the Astryx version pin
+
+All four Astryx packages are pinned to the exact same canary, `0.1.8-canary.fe8657a`.
+
+`@astryxdesign/charts` has no stable release — its `latest` tag is a `0.0.0-bootstrap.0` placeholder — and every canary peer-depends on the *identically versioned* core. Mixing stable `core@0.1.8` with a charts canary fails to resolve. Since the PRD requires `@astryxdesign/charts` for the sparkline and the price-history chart, the whole set moves to one canary together. **Bump all four at once, or none.**
+
+---
+
+## Getting started
+
+```bash
+npm install
+cp .env.example .env.local     # then fill it in
+npm run db:push                # apply supabase/migrations/*.sql
+npm run provision:user         # create the first invite-only account
+npm run seed                   # parse + seed the vendor ledger
+npm run dev
+```
+
+### Scripts
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Dev server on :3000 |
+| `npm run build` | Production build |
+| `npm run lint` | ESLint |
+| `npm run db:push` | Applies `supabase/migrations/*.sql` in order, tracked in `public.schema_migrations`. Idempotent |
+| `npm run provision:user` | Creates (or resets the password of) `SEED_OWNER_EMAIL` |
+| `npm run seed` | Parses the ledger `.xlsx` and seeds products + price entries. Idempotent. `SEED_RESET=true` replaces the batch |
+| `node --env-file=.env.local scripts/smoke.mjs` | End-to-end browser smoke test (40 checks, drives real Chrome) |
+
+---
+
+## Data pipeline
+
+The source is a Tally **ledger account print**, not a table. Rows 1–13 are letterhead, row 14 is the header, and everything below is voucher-grouped: a dated parent row followed by undated child rows.
+
+A child row is a product line **iff** its description is non-empty *and* both quantity and rate are numeric. That single rule excludes every non-product label in the file (`Purchase`, `CGST`, `SGST`, `IGST`, `Rounding Off`, `TCS on Purchase`, `New Ref`, `Agst Ref`, `Closing Balance`, and one stray service line).
+
+From the Signify export, verified twice and asserted by the seed script:
+
+| | |
+|---|---|
+| Product lines | **784** |
+| → `Purchase` | 746 · ingested |
+| → `Intransit` | 1 · ingested (a real acquisition at a real rate) |
+| → `Debit Note` | 37 · **dropped** |
+| Price entries seeded | **747** |
+| Distinct products | **195** |
+| Date range | 2024-04-05 → 2026-07-24 |
+
+### Why Debit Notes are excluded
+
+Debit Notes are returns, and Tally records them at the **original purchase rate**. On 2026-07-18 a Debit Note reverses `BVP282 LED120 CW FG SY5WB 100W V1` at ₹3,800 — but that product's price had moved to ₹4,500 by then. Ingesting it would draw a 16% price crash on a day when nothing happened. They never reach `price_entries`.
+
+### Why dedup is exact-match only
+
+195 raw descriptions normalize (trim + case-fold + collapse whitespace) to 195 distinct keys — **zero collisions**. There are 112 pairs above 85% string similarity, but they are genuinely different SKUs: `BRP331 LED48 CW R5N PC PSU S1` vs `BRP331 LED54 CW R5N PC PSU S1` differ by wattage. Signify encodes spec in the description, so a one-character delta is a different product at a different price.
+
+**Fuzzy matching is forbidden.** Product identity is `(vendor_id, description_norm)`, enforced by a unique index.
+
+### Two dates that matter
+
+- **Serial dates, not `cellDates`.** `xlsx` with `cellDates: true` decodes 2024-04-05 to `2024-04-04T23:59:50` local — a float-rounding artifact that silently shifts every purchase back one day. The parser reads serials and decodes them with `SSF.parse_date_code`, which is exact and timezone-free.
+- **`purchase_date` is a calendar date.** It is never passed through `new Date()` for display. `lib/format.ts` formats by string surgery, because constructing a `Date` parses as UTC midnight and would render the previous day in a behind-UTC timezone.
+
+### Known data anomalies (surfaced, not hidden)
+
+The seed script reports both every run:
+
+- **6 byte-identical repeated lines.** Same date, product, qty and rate — possibly split vouchers, possibly export artifacts. All are ingested (they are price-identical, so they cannot distort a chart) and logged for review.
+- **7 cases of two different prices on one day**, e.g. `RC370B LED36S-6500` at ₹1,050 and ₹1,100 on 2025-08-29. Legitimate. This is why `purchase_date` is not unique per product, why "current price" needs a deterministic tie-break, and why the detail chart uses a linear x-axis with dodged dots instead of a band scale that would collapse them.
+
+Because ledger lines can legitimately repeat, the import key is the **ledger line itself** — `(source_batch, source_line_no)` — not a value tuple. That preserves all 747 rows, keeps re-runs idempotent, and lets any price entry be traced back to a row number in a named export.
+
+---
+
+## Schema
+
+```
+vendors 1 ──< products 1 ──< price_entries
+                                  │
+auth.users ──────────────────────┘   (created_by / updated_by)
+```
+
+- **`products.description_norm`** — generated, stored, uniquely indexed with `vendor_id`. The only dedup mechanism.
+- **`products.product_code`** — Aalino-internal, absent from all source data. Optional, unique when set, unique *globally* (one code must never mean two things, even across vendors).
+- **`price_entries.line_amount`** — stored as printed in the ledger so rounding is preserved. Displayed, never used for price math.
+- **Nothing derived is stored.** "Current price" is always computed.
+
+### Derived reads
+
+| Function / view | Purpose |
+|---|---|
+| `product_summary(from, to)` | One round trip for the whole main table: per-product rollup plus each sparkline series, over the active window. No N+1 for 195 rows |
+| `product_entries(id, from, to)` | Detail page entries with the author's email resolved |
+| `vendor_stats` | The `/vendors` page |
+| `app_users` | Minimal, deliberate exposure of `auth.users` (id + email only) so the UI can render "added by" |
+
+**Current price tie-break:** `purchase_date desc, created_at desc, id desc`.
+
+**Range semantics:** metrics are always computed over the window. With no bounds (all time), products with zero entries are still returned so a just-created product is visible; with either bound set, only products having ≥1 entry in the window appear.
+
+### Security
+
+RLS is on for all three tables. Anonymous gets nothing. Authenticated users read and write everything — a single trust tier is right for 2–5 people.
+
+Authorship is **enforced, not trusted**: `with check (created_by = auth.uid())` makes it impossible to write a row attributed to someone else. `products` has no delete policy at all, since deleting a product would cascade away real purchase history.
+
+The secret key is used only by local scripts and is never sent to the client.
+
+---
+
+## Realtime
+
+`products` and `price_entries` are in the `supabase_realtime` publication with `REPLICA IDENTITY FULL`, so DELETE payloads carry `product_id`.
+
+- **Main table** subscribes to both tables and refetches the summary, debounced 300ms, so a burst of inserts costs one round trip instead of one per event. It also refetches once on `online` to close any gap from a dropped socket.
+- **Detail page** subscribes server-side-filtered to this product's entries. The chart and the entries table both derive from one `entries` list, so there is a single source of truth for both.
+- Remote changes never steal focus or reset sort, filter, or scroll.
+
+---
+
+## Deviations from the PRD
+
+Everything below was verified against the database or the browser.
+
+1. **Plain search instead of `PowerSearch`.** The PRD left this to judgement ("if warranted"). It isn't: the two useful axes are description and product code, both free text, and PowerSearch's field/operator/value tokens add three interactions per query without adding reach. The enumerated dimensions are covered by the four quick-filter chips.
+
+2. **`Section` has no `title`/`subtitle`/`endContent` props** in this Astryx version, so section headers are composed explicitly from `Heading` + `Text`.
+
+3. **Dialogs render outside `Layout`.** `Layout` resolves its body as `content ?? children`, so anything passed as a child is silently dropped whenever `content` is set. This cost real debugging time — every dialog was mounting nowhere.
+
+4. **`Chart` needs a bounded container.** It sizes itself via `ResizeObserver` and exposes no `width` prop; inside a table cell it measured wider than the column and spilled past the table's right edge. The sparkline pins its own width. Charts also render nothing during SSR, so they are invisible to server-rendered HTML checks.
+
+5. **PRD §2.4 statistics counted debit-note lines.** Over the 747 rows actually ingested the correct figures are **3.83** average entries per product (not 4.02), **35** for the busiest product `RC370B LED36S-6500` (not 41 — it has 35 purchases plus 6 debit-note lines), and **83** single-purchase products (not ~79). The headline claim is unaffected and confirmed exactly: **64 of 195 products (33%)** have more than one distinct historical price.
+
+6. **PRD §2.6b said 8 identical-line groups / 9 surplus rows**; that count included debit notes. Over price-bearing lines only it is **6 groups / 6 surplus rows**.
+
+7. **`middleware.ts` → `proxy.ts`.** Next.js 16 deprecates the `middleware` file convention.
+
+8. **Added `price_entries.source_line_no`** (migration `0005`) — see the import-key rationale above. Without it the seed lands 745 rows instead of the mandated 747.
+
+---
+
+## What is deliberately not here
+
+No in-app CSV/XLSX import (vendor ledgers are seeded by script — that was an explicit scope cut). No product merge or fuzzy dedup tooling. No roles or permission tiers. No GST/tax/invoicing. No stock or purchase orders. No customer pricing or margins. No multi-vendor UI — the schema supports it, and the Vendor column and nav badge appear automatically once a second vendor row exists. No dark mode. No export. No price alerts. Desktop-first.
+
+Products cannot be deleted from the UI, by design. Price entries can.
+
+---
+
+## Operational note
+
+Public signup must be turned **off** in Supabase → Authentication → Sign In / Providers ("Allow new users to sign up"). The app ships no signup route, but the Auth API endpoint stays open until that toggle is flipped.

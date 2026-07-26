@@ -1,0 +1,15 @@
+/*
+ * Astryx owns all styling. This file exists only to load the design system's
+ * stylesheets in the required order:
+ *   reset -> component CSS -> theme token/component overrides
+ *
+ * No app-level rules belong here. Per-component styling goes through component
+ * props first, then tokens (var(--color-*), var(--spacing-*), …).
+ * No raw hex or px anywhere in this project (PRD §6.0).
+ *
+ * Light mode only (PRD §6): the CRA-style prefers-color-scheme block that
+ * create-next-app ships was removed rather than left inert.
+ */
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+@import '@astryxdesign/theme-neutral/theme.css';
