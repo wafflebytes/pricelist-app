@@ -68,6 +68,15 @@ await page.waitForTimeout(400);
 const searched = await page.locator('table tbody tr').count();
 t('search narrows the table', searched>0 && searched<50, `${searched} rows for "BVP282"`);
 t('filtered count updates', /\d+ of 195 products/.test(await page.textContent('body')));
+// fuzzy search: squashed spacing and reordered tokens must still match
+await page.getByPlaceholder('Search description or product code…').fill('rc370');
+await page.waitForTimeout(500);
+const fuzzy1 = await page.locator('table tbody tr').count();
+t('fuzzy: "rc370" matches "RC370B …"', fuzzy1>0, `${fuzzy1} rows`);
+await page.getByPlaceholder('Search description or product code…').fill('282 bvp');
+await page.waitForTimeout(500);
+const fuzzy2 = await page.locator('table tbody tr').first().textContent();
+t('fuzzy: reordered tokens "282 bvp" find BVP282', /BVP282/.test(fuzzy2 ?? ''), (fuzzy2??'').slice(0,34));
 await page.getByPlaceholder('Search description or product code…').fill('');
 await page.waitForTimeout(300);
 
@@ -144,7 +153,8 @@ await page.goto(BASE+'/products', {waitUntil:'networkidle'});
 await page.waitForSelector('table tbody tr');
 await page.getByPlaceholder('Search description or product code…').fill('RC370B LED36S-6500');
 await page.waitForTimeout(500);
-await page.getByRole('button',{name:'RC370B LED36S-6500', exact:true}).first().click();
+// The description cell is a Link now (it truncates; a Button could not).
+await page.getByRole('link',{name:'RC370B LED36S-6500', exact:true}).first().click();
 await page.waitForURL('**/products/**', {timeout:15000});
 await page.waitForLoadState('networkidle');
 t('navigated to detail', /\/products\/[0-9a-f-]{36}/.test(page.url()));
@@ -240,7 +250,21 @@ await page.getByRole('button',{name:'Add product'}).first().click();
 await page.waitForTimeout(700);
 const pdlg = page.locator('dialog[open]').first();
 t('add-product dialog opened', await pdlg.count()>0);
+
+// live fuzzy suggestions while typing a description
+await pdlg.getByLabel('Description').fill('rc370b led36s');
+await page.waitForTimeout(700);
+const sugg = await pdlg.textContent();
+t('typing surfaces similar existing products', /look similar|Did you mean/.test(sugg ?? ''),
+  (sugg??'').match(/(Did you mean[^]{0,20}|look similar)/)?.[0] ?? 'none');
+t('suggestion list is populated', (await pdlg.locator('li').count())>0,
+  `${await pdlg.locator('li').count()} suggestion(s)`);
+await page.screenshot({path:'.verify/15-fuzzy-suggestions.png'});
+
 await pdlg.getByLabel('Description').fill('RC370B LED36S-6500');
+await page.waitForTimeout(700);
+t('near-exact description warns before submit',
+  /Very similar to an existing product/.test(await pdlg.textContent() ?? ''));
 await pdlg.getByRole('button',{name:'Add product'}).click();
 await page.waitForTimeout(2000);
 const addBody = await pdlg.textContent();

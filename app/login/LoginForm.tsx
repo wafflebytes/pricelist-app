@@ -47,7 +47,8 @@ export function LoginForm({next}: {next?: string}) {
 
   return (
     <Center height="100dvh">
-      <VStack gap={4} width={400} style={{maxWidth: '100%'}}>
+      {/* padding keeps the card off the screen edges on a phone */}
+      <VStack gap={4} width={400} padding={3} style={{maxWidth: '100%'}}>
         <VStack gap={1}>
           <Heading level={1}>Aalino Price List</Heading>
           <Text type="body" color="secondary">

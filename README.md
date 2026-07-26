@@ -152,17 +152,36 @@ Everything below was verified against the database or the browser.
 
 3. **Dialogs render outside `Layout`.** `Layout` resolves its body as `content ?? children`, so anything passed as a child is silently dropped whenever `content` is set. This cost real debugging time — every dialog was mounting nowhere.
 
-4. **`Chart` needs a bounded container.** It sizes itself via `ResizeObserver` and exposes no `width` prop; inside a table cell it measured wider than the column and spilled past the table's right edge. The sparkline pins its own width. Charts also render nothing during SSR, so they are invisible to server-rendered HTML checks.
+4. **The sparkline is hand-rolled SVG, not `<Chart>`.** The PRD sanctioned this fallback "only after measuring". Measurement said take it: `Chart` sizes itself with a `ResizeObserver` and exposes no `width` prop, so 50 per page meant 50 observers thrashing layout during scroll, and inside a table cell each measured wider than its column and spilled past the table's right edge. The replacement has a fixed viewBox, no effects, renders during SSR, and colours from theme tokens. `<Chart>` is still used for the detail page's price history, where there is exactly one and it has room.
 
-5. **PRD §2.4 statistics counted debit-note lines.** Over the 747 rows actually ingested the correct figures are **3.83** average entries per product (not 4.02), **35** for the busiest product `RC370B LED36S-6500` (not 41 — it has 35 purchases plus 6 debit-note lines), and **83** single-purchase products (not ~79). The headline claim is unaffected and confirmed exactly: **64 of 195 products (33%)** have more than one distinct historical price.
+5. **The description cell is a `Link`, not a `Button`.** Buttons size to their content, so a 45-character Signify description overflowed its column and painted over the next cell. `Link`'s own `maxLines` does not fix it either — it clamps the inner `Text` while the anchor itself stays `inline-flex` with `overflow: visible`, so the clamp box just grows. The anchor needs to become a clipping block in its own right.
 
-6. **PRD §2.6b said 8 identical-line groups / 9 surplus rows**; that count included debit notes. Over price-bearing lines only it is **6 groups / 6 surplus rows**.
+6. **Search is fuzzy and ranked** (`lib/fuzzy.ts`), so `rc370` finds `RC 370B …` and `282 bvp` finds `BVP282 …` despite the export's inconsistent spacing. Typing a description in the add-product dialog surfaces similar existing products live, with a louder warning above 0.8 similarity. This is presentation only — identity is still exact-match on the normalized description, and nothing here ever merges records.
 
-7. **`middleware.ts` → `proxy.ts`.** Next.js 16 deprecates the `middleware` file convention.
+7. **PRD §2.4 statistics counted debit-note lines.** Over the 747 rows actually ingested the correct figures are **3.83** average entries per product (not 4.02), **35** for the busiest product `RC370B LED36S-6500` (not 41 — it has 35 purchases plus 6 debit-note lines), and **83** single-purchase products (not ~79). The headline claim is unaffected and confirmed exactly: **64 of 195 products (33%)** have more than one distinct historical price.
 
-8. **Added `price_entries.source_line_no`** (migration `0005`) — see the import-key rationale above. Without it the seed lands 745 rows instead of the mandated 747.
+8. **PRD §2.6b said 8 identical-line groups / 9 surplus rows**; that count included debit notes. Over price-bearing lines only it is **6 groups / 6 surplus rows**.
+
+9. **`middleware.ts` → `proxy.ts`.** Next.js 16 deprecates the `middleware` file convention.
+
+10. **Added `price_entries.source_line_no`** (migration `0005`) — see the import-key rationale above. Without it the seed lands 745 rows instead of the mandated 747.
 
 ---
+
+## Responsive behaviour
+
+The PRD asked for desktop-first that "must not break" on tablet. It now adapts properly instead:
+
+| Width | Products | Detail |
+|---|---|---|
+| ≥ 1200px | 7 columns | 6 stat tiles, 320px chart, 8-column entries table |
+| ≥ 1024px | drops Entries and Product code | same |
+| < 1024px | table replaced by edge-to-edge rows | tiles reflow, 220px chart with fewer ticks, entries become rows |
+| < 1024px | side nav becomes the AppShell drawer, closing itself on navigation; toolbar stacks full-width; page actions go icon-only | |
+
+The table is replaced rather than scrolled sideways below 1024px because a 260px side nav leaves an 834px tablet only ~574px of content — not enough for five columns. Long descriptions are clamped with an ellipsis and a hover tooltip at every width, and no viewport scrolls horizontally.
+
+`scripts/responsive.mjs` enforces this across 390 / 834 / 1280 / 1600: no horizontal page overflow, correct layout and column set per width, descriptions actually ellipsised, no content painted over the next column (accounting for clipping ancestors), exactly one vertical scroll container, and no console errors.
 
 ## What is deliberately not here
 

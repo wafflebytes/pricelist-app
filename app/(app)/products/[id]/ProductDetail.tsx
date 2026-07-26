@@ -36,9 +36,18 @@ import type {Product, ProductEntryRow, Vendor} from '@/lib/types';
 import {inr, qty, pct, formatDate, relativeDays} from '@/lib/format';
 import {getClient} from '@/lib/supabase/client';
 import {useHasMounted} from '@/lib/useHasMounted';
+import {useMediaQuery} from '@astryxdesign/core/hooks';
+import {EntryRows} from './EntryRows';
 import {deletePriceEntry} from '@/lib/actions';
 import {ProductDialog} from '../ProductDialog';
 import {PriceEntryDialog} from './PriceEntryDialog';
+
+// Responsive contract for this page:
+//   > 768px  6 stat tiles across, 320px chart, 8-column entries table
+//   <= 768px tiles reflow to 2 columns, chart drops to 220px with tighter
+//            margins and fewer ticks, entries become rows, header actions
+//            become icon-only
+const BP_WIDE = '(min-width: 769px)';
 
 const EPOCH_DAY = 86_400_000;
 
@@ -86,6 +95,7 @@ export function ProductDetail({
   // See lib/useHasMounted: relative dates are client-only to avoid a
   // UTC-server vs IST-browser hydration mismatch.
   const hasMounted = useHasMounted();
+  const isWide = useMediaQuery(BP_WIDE, true);
 
   const rangeKey = `${range?.start ?? ''}|${range?.end ?? ''}`;
 
@@ -269,7 +279,7 @@ export function ProductDetail({
         align: 'end',
         sortable: true,
         renderCell: e => (
-          <Text type="body" weight="medium">
+          <Text type="body" weight="medium" hasTabularNumbers>
             {inr(Number(e.unit_price))}
           </Text>
         ),
@@ -280,7 +290,11 @@ export function ProductDetail({
         width: pixel(90),
         align: 'end',
         sortable: true,
-        renderCell: e => <Text type="body">{qty(Number(e.quantity))}</Text>,
+        renderCell: e => (
+          <Text type="body" hasTabularNumbers>
+            {qty(Number(e.quantity))}
+          </Text>
+        ),
       },
       {
         key: 'line_amount',
@@ -289,7 +303,7 @@ export function ProductDetail({
         align: 'end',
         sortable: true,
         renderCell: e => (
-          <Text type="body" color="secondary">
+          <Text type="body" color="secondary" hasTabularNumbers>
             {e.line_amount === null ? '—' : inr(Number(e.line_amount))}
           </Text>
         ),
@@ -321,7 +335,9 @@ export function ProductDetail({
         header: 'Added by',
         width: proportional(1),
         renderCell: e => (
-          <Text type="supporting">{e.created_by_email ?? 'Unknown'}</Text>
+          <Text type="supporting" maxLines={1} hasTruncateTooltip>
+            {e.created_by_email ?? 'Unknown'}
+          </Text>
         ),
       },
       {
@@ -376,7 +392,7 @@ export function ProductDetail({
       height="fill"
       header={
         <LayoutHeader hasDivider>
-          <VStack gap={3} padding={3}>
+          <VStack gap={isWide ? 3 : 2} padding={isWide ? 3 : 2}>
             <Breadcrumbs>
               <BreadcrumbItem href="/products">Products</BreadcrumbItem>
               <BreadcrumbItem isCurrent>{product.description}</BreadcrumbItem>
@@ -385,7 +401,11 @@ export function ProductDetail({
             <HStack gap={2} vAlign="start">
               <StackItem size="fill">
                 <VStack gap={1}>
-                  <Heading level={1}>{product.description}</Heading>
+                  {/* Signify descriptions run past 45 characters; the title
+                      wraps rather than pushing the actions off-screen. */}
+                  <Heading level={1} wordBreak="break-word">
+                    {product.description}
+                  </Heading>
                   <HStack gap={2} vAlign="center" wrap="wrap">
                     <Badge
                       variant={product.product_code ? 'neutral' : 'warning'}
@@ -401,12 +421,14 @@ export function ProductDetail({
               <Button
                 label="Edit product"
                 variant="secondary"
+                isIconOnly={!isWide}
                 icon={<PencilSquareIcon width={16} height={16} />}
                 onClick={() => setIsProductDialogOpen(true)}
               />
               <Button
                 label="Add price entry"
                 variant="primary"
+                isIconOnly={!isWide}
                 icon={<PlusIcon width={16} height={16} />}
                 onClick={() => setEntryDialog({mode: 'create'})}
               />
@@ -428,11 +450,13 @@ export function ProductDetail({
         </LayoutHeader>
       }
       content={
-        <LayoutContent padding={3}>
-          <VStack gap={4}>
+        <LayoutContent padding={isWide ? 3 : 2}>
+          <VStack gap={isWide ? 4 : 3}>
             {/* Stat row. Cards are right here: six discrete, comparable
                 figures in a grid is exactly what Card is for. */}
-            <Grid columns={{minWidth: 150, max: 6}} gap={2}>
+            {/* KPI tiles are the one legitimate use of Card here. Two across
+                on a phone, up to six on a desktop. */}
+            <Grid columns={{minWidth: isWide ? 150 : 132, max: 6}} gap={2}>
               <StatCard label="Current price" value={inr(stats?.current ?? null)} />
               <StatCard label="First price" value={inr(stats?.first ?? null)} />
               <StatCard
@@ -461,7 +485,7 @@ export function ProductDetail({
               />
             </Grid>
 
-            <Section padding={3}>
+            <Section padding={isWide ? 3 : 2}>
               <VStack gap={3}>
                 <HStack gap={2} vAlign="center" wrap="wrap">
                   <StackItem size="fill">
@@ -499,9 +523,13 @@ export function ProductDetail({
                     data={chartData}
                     xKey="day"
                     series={chartSeries}
-                    height={280}
+                    height={isWide ? 280 : 200}
                     yBaseline="data"
-                    margin={{left: 72, right: 16, top: 16, bottom: 32}}
+                    margin={
+                      isWide
+                        ? {left: 72, right: 16, top: 16, bottom: 32}
+                        : {left: 56, right: 8, top: 12, bottom: 28}
+                    }
                     grid={<ChartGrid horizontal />}
                     axes={
                       <>
@@ -528,22 +556,26 @@ export function ProductDetail({
                   data={chartData}
                   xKey="day"
                   series={chartSeries}
-                  height={320}
+                  height={isWide ? 320 : 220}
                   // Not zero-baselined: the moves that matter here are 5-20%,
                   // and a zero baseline flattens them (PRD §9.4).
                   yBaseline="data"
-                  margin={{left: 72, right: 16, top: 16, bottom: 32}}
-                  grid={<ChartGrid horizontal />}
+                  margin={
+                    isWide
+                      ? {left: 72, right: 16, top: 16, bottom: 32}
+                      : {left: 56, right: 8, top: 12, bottom: 28}
+                  }
+                  grid={<ChartGrid horizontal tickCount={isWide ? 5 : 3} />}
                   axes={
                     <>
                       <ChartAxis
                         position="bottom"
-                        tickCount={6}
+                        tickCount={isWide ? 6 : 3}
                         tickFormat={v => formatDate(fromDayNumber(Number(v)))}
                       />
                       <ChartAxis
                         position="left"
-                        tickCount={5}
+                        tickCount={isWide ? 5 : 3}
                         tickFormat={v => inr(Number(v))}
                       />
                     </>
@@ -573,7 +605,7 @@ export function ProductDetail({
               </VStack>
             </Section>
 
-            <Section padding={3}>
+            <Section padding={isWide ? 3 : 2}>
               <VStack gap={3}>
                 <VStack gap={0.5}>
                   <Heading level={2}>Purchase entries</Heading>
@@ -596,7 +628,7 @@ export function ProductDetail({
                     />
                   }
                 />
-              ) : (
+              ) : isWide ? (
                 <Table<ProductEntryRow>
                   data={sortedEntries}
                   columns={columns}
@@ -605,6 +637,12 @@ export function ProductDetail({
                   dividers="rows"
                   hasHover
                   plugins={{sortable}}
+                />
+              ) : (
+                <EntryRows
+                  entries={sortedEntries}
+                  onEdit={entry => setEntryDialog({mode: 'edit', entry})}
+                  onDelete={setPendingDelete}
                 />
               )}
               </VStack>

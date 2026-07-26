@@ -1,24 +1,28 @@
-'use client';
-
-import {Chart, line} from '@astryxdesign/charts';
 import {Text} from '@astryxdesign/core/Text';
-import {HStack, Stack} from '@astryxdesign/core/Layout';
 import type {SparkPoint} from '@/lib/types';
 
-const SPARK_HEIGHT = 34;
-/** Matches the Price trend column width, less cell padding. */
-const SPARK_WIDTH = 124;
+const W = 112;
+const H = 28;
+const PAD = 3;
 
 /**
- * Compact price trend for a table row. Axes, grid, legend and tooltip are all
- * suppressed — the row's own Current price and Change % columns carry the
- * numbers, so this is purely shape.
+ * Compact price trend for a table row.
  *
- * A single-entry product gets a dot plus a caption rather than a flat line,
- * because ~83 of 195 products have exactly one purchase and a flat line would
- * read as "price held steady" (PRD §2.8).
+ * Deliberately hand-rolled SVG rather than `<Chart>` from @astryxdesign/charts.
+ * The PRD sanctioned this fallback after measurement, and measurement said to
+ * take it: Chart sizes itself with a ResizeObserver and exposes no `width`
+ * prop, so 50 of them per page meant 50 observers thrashing layout during
+ * scroll, and inside a table cell each one measured wider than its column and
+ * spilled past the table's right edge.
+ *
+ * This version has a fixed viewBox, no measurement, no effects, and renders
+ * during SSR. Colour comes from theme tokens — no hardcoded hex.
+ *
+ * A single-entry product gets a caption instead of a line: 83 of 195 products
+ * have exactly one purchase, and a flat line would read as "price held steady"
+ * when the truth is "we only ever bought this once".
  */
-export function Sparkline({points}: {points: SparkPoint[]}) {
+export function Sparkline({points, label}: {points: SparkPoint[]; label?: string}) {
   if (points.length === 0) {
     return (
       <Text type="supporting" color="secondary">
@@ -29,34 +33,58 @@ export function Sparkline({points}: {points: SparkPoint[]}) {
 
   if (points.length === 1) {
     return (
-      <HStack gap={1} vAlign="center" height={SPARK_HEIGHT}>
-        <Text type="supporting" color="secondary">
-          single purchase
-        </Text>
-      </HStack>
+      <Text type="supporting" color="secondary">
+        single purchase
+      </Text>
     );
   }
 
-  // The chart's x is the point index, not the date: a sparkline shows sequence,
-  // and irregular purchase gaps would otherwise crush most points against one
-  // edge at this width.
-  const data = points.map((pt, i) => ({i, price: pt.p}));
+  const prices = points.map(p => Number(p.p));
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  // Flat series would divide by zero; render it as a centred line.
+  const span = max - min || 1;
+
+  const stepX = (W - PAD * 2) / (points.length - 1);
+  const coords = prices.map((price, i) => {
+    const x = PAD + i * stepX;
+    const y = max === min
+      ? H / 2
+      : PAD + (1 - (price - min) / span) * (H - PAD * 2);
+    return [x, y] as const;
+  });
+
+  const d = coords.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ');
+  const [lastX, lastY] = coords[coords.length - 1];
+  const rising = prices[prices.length - 1] > prices[0];
+
+  // A rising cost is what warrants attention; a falling one is good news.
+  // Matches the Change badge's warning/success tones on the same row.
+  const stroke = rising ? 'var(--color-text-orange)' : 'var(--color-text-green)';
 
   return (
-    // Chart sizes itself from its container via ResizeObserver and has no
-    // `width` prop. Inside a table cell it measures wider than the column and
-    // spills past the table's right edge, so the width is pinned here.
-    <Stack width={SPARK_WIDTH} height={SPARK_HEIGHT} style={{overflow: 'hidden'}}>
-      <Chart
-        data={data}
-        xKey="i"
-        series={[line('price', {curve: 'monotone', strokeWidth: 1.5})]}
-        height={SPARK_HEIGHT}
-        margin={{left: 2, right: 2, top: 4, bottom: 4}}
-        // 'data' baseline, not zero: the movements that matter here are 5-20%,
-        // and a zero baseline flattens them into a straight line (PRD §9.4).
-        yBaseline="data"
+    <svg
+      width={W}
+      height={H}
+      viewBox={`0 0 ${W} ${H}`}
+      role="img"
+      aria-label={
+        label ??
+        `Price trend across ${points.length} purchases, ${rising ? 'rising' : 'falling'} overall`
+      }
+      style={{display: 'block', overflow: 'visible'}}
+    >
+      <path
+        d={d}
+        fill="none"
+        stroke={stroke}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
       />
-    </Stack>
+      {/* Marks the latest price, so the eye lands on "where we are now". */}
+      <circle cx={lastX} cy={lastY} r={2} fill={stroke} />
+    </svg>
   );
 }

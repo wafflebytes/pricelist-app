@@ -1,6 +1,6 @@
 'use client';
 
-import {useState} from 'react';
+import {useMemo, useState} from 'react';
 import {useRouter} from 'next/navigation';
 import {Dialog, DialogHeader} from '@astryxdesign/core/Dialog';
 import {FormLayout} from '@astryxdesign/core/FormLayout';
@@ -9,6 +9,10 @@ import {Selector} from '@astryxdesign/core/Selector';
 import {Button} from '@astryxdesign/core/Button';
 import {Banner} from '@astryxdesign/core/Banner';
 import {HStack, VStack, StackItem} from '@astryxdesign/core/Layout';
+import {Text} from '@astryxdesign/core/Text';
+import {List} from '@astryxdesign/core/List';
+import {Item} from '@astryxdesign/core/Item';
+import {fuzzyRank, similarity} from '@/lib/fuzzy';
 import type {Product, Vendor} from '@/lib/types';
 import {createProduct, updateProduct} from '@/lib/actions';
 
@@ -28,6 +32,7 @@ export function ProductDialog({
   onClose,
   vendors,
   product,
+  existing = [],
   onSaved,
 }: {
   /** Always true in practice: the parent mounts this only while open. */
@@ -36,6 +41,11 @@ export function ProductDialog({
   vendors: Vendor[];
   /** Omitted for create. */
   product?: Pick<Product, 'id' | 'description' | 'product_code' | 'notes' | 'vendor_id'>;
+  /**
+   * Existing products, used only to suggest matches while typing. Never used to
+   * merge anything — identity stays exact-match (PRD §2.5).
+   */
+  existing?: Array<{id: string; description: string; product_code: string | null}>;
   onSaved: (createdId?: string) => void | Promise<void>;
 }) {
   const router = useRouter();
@@ -48,6 +58,26 @@ export function ProductDialog({
   const [error, setError] = useState<string | null>(null);
   const [conflictId, setConflictId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Live fuzzy suggestions as the description is typed. Two jobs: stop someone
+  // re-adding a product that already exists, and save them typing a 45-character
+  // spec string when they only meant to find it.
+  const suggestions = useMemo(() => {
+    const query = description.trim();
+    if (query.length < 2) return [];
+    return fuzzyRank(
+      query,
+      existing.filter(e => e.id !== product?.id),
+      e => [e.description, e.product_code],
+      5,
+    ).map(e => ({...e, similarity: similarity(query, e.description)}));
+  }, [description, existing, product?.id]);
+
+  // A very close match is worth a louder warning than a merely related one —
+  // but it is still only advice. Near-identical Signify descriptions are
+  // frequently different SKUs (wattage/CCT variants), so the user decides.
+  const closest = suggestions[0];
+  const looksLikeDuplicate = closest !== undefined && closest.similarity >= 0.8;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -121,7 +151,44 @@ export function ProductDialog({
               placeholder="e.g. RC370B LED36S-6500 G6 L60W60 PSU OD V3"
               description="Exactly as the vendor words it. Near-identical descriptions are different SKUs and are kept separate."
               isRequired
+              status={
+                looksLikeDuplicate
+                  ? {
+                      type: 'warning',
+                      message: 'Very similar to an existing product — check the matches below.',
+                    }
+                  : undefined
+              }
             />
+
+            {suggestions.length > 0 ? (
+              <VStack gap={1}>
+                <Text type="supporting">
+                  {looksLikeDuplicate
+                    ? 'Did you mean one of these?'
+                    : 'Existing products that look similar'}
+                </Text>
+                <List hasDividers density="compact">
+                  {suggestions.map(match => (
+                    <Item
+                      key={match.id}
+                      as="li"
+                      label={match.description}
+                      labelLines={2}
+                      description={match.product_code ?? 'No product code'}
+                      onClick={() => {
+                        onClose();
+                        router.push(`/products/${match.id}`);
+                      }}
+                    />
+                  ))}
+                </List>
+                <Text type="supporting" color="secondary">
+                  Different wattage or colour temperature means a different
+                  product — add it as new if none of these are it.
+                </Text>
+              </VStack>
+            ) : null}
 
             {/* The vendor field is modelled and stored, never hardcoded. It is
                 a single-option Selector today and becomes a real choice the

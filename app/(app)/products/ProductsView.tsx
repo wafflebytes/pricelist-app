@@ -21,12 +21,14 @@ import {EmptyState} from '@astryxdesign/core/EmptyState';
 import {TextInput} from '@astryxdesign/core/TextInput';
 import {Tooltip} from '@astryxdesign/core/Tooltip';
 import {ToggleButton, ToggleButtonGroup} from '@astryxdesign/core/ToggleButton';
+import {Link} from '@astryxdesign/core/Link';
+import {useMediaQuery} from '@astryxdesign/core/hooks';
+import NextLink from 'next/link';
 import {DateRangeInput} from '@astryxdesign/core/DateRangeInput';
 import type {DateRange} from '@astryxdesign/core/DateRangeInput';
 import {
   Table,
   useTableSortable,
-  useTableStickyColumns,
   useTableColumnResize,
   proportional,
   pixel,
@@ -45,11 +47,25 @@ import {
 } from '@/lib/format';
 import {getClient} from '@/lib/supabase/client';
 import {useHasMounted} from '@/lib/useHasMounted';
+import {fuzzyScoreAny} from '@/lib/fuzzy';
 import {Sparkline} from '@/components/Sparkline';
 import {ProductCodeCell} from './ProductCodeCell';
+import {ProductRows} from './ProductRows';
 import {ProductDialog} from './ProductDialog';
 
 const PAGE_SIZE = 50;
+
+// Responsive contract for this page:
+//   >= 1200px full table: description | code | price | change | last | entries | trend
+//   >= 1024px drop Entries and Product code — the columns a pricing decision
+//             rarely needs (both still editable on the detail page)
+//   <  1024px the table is replaced by ProductRows (edge-to-edge rows), because
+//             a 260px side nav leaves an 834px tablet only ~574px of content —
+//             not enough for five columns without horizontal scrolling. The
+//             toolbar stacks, its controls go full-width, and the page action
+//             becomes icon-only.
+const BP_TABLE = '(min-width: 1024px)';
+const BP_WIDE = '(min-width: 1200px)';
 
 type SortState = Array<{
   sortKey: string;
@@ -63,6 +79,14 @@ const CHIP_LABEL: Record<Chip, string> = {
   single: 'Single purchase',
   stale: `Not purchased in ${STALE_DAYS}d`,
   increased: 'Price increased',
+};
+
+/** Abbreviated chip labels for narrow viewports. */
+const CHIP_LABEL_SHORT: Record<Chip, string> = {
+  uncoded: 'Uncoded',
+  single: 'One-off',
+  stale: 'Stale',
+  increased: 'Rising',
 };
 
 /** Financial-year presets, because that is how the ledger itself is cut. */
@@ -108,6 +132,12 @@ export function ProductsView({
   // Relative dates depend on "now", which differs between the UTC server and
   // an IST browser. They are rendered only after hydration.
   const hasMounted = useHasMounted();
+
+  // useMediaQuery is SSR-safe and returns the server default on first render,
+  // so the desktop table is what gets server-rendered and there is no
+  // hydration mismatch; narrow viewports swap to rows immediately after.
+  const isTableLayout = useMediaQuery(BP_TABLE, true);
+  const isWide = useMediaQuery(BP_WIDE, true);
 
   // Only surface the vendor column once a second vendor actually exists
   // (PRD §10) — the field is modelled and stored either way.
@@ -185,16 +215,13 @@ export function ProductsView({
   }, [load]);
 
   // ----------------------------------------------------------------- filters
+  // Search is fuzzy and ranked (see lib/fuzzy): 'rc370' finds 'RC 370B ...',
+  // '282 bvp' finds 'BVP282 ...'. Signify part descriptions have inconsistent
+  // spacing, so a plain substring test misses obvious intent.
   const filtered = useMemo(() => {
-    const needle = search.trim().toLowerCase();
+    const query = search.trim();
 
-    return rows.filter(r => {
-      if (needle) {
-        const haystack = `${r.description} ${r.product_code ?? ''} ${
-          showVendor ? r.vendor_name : ''
-        }`.toLowerCase();
-        if (!haystack.includes(needle)) return false;
-      }
+    const matches = rows.filter(r => {
       for (const chip of chips) {
         if (chip === 'uncoded' && r.product_code) return false;
         if (chip === 'single' && r.entry_count !== 1) return false;
@@ -210,10 +237,30 @@ export function ProductsView({
       }
       return true;
     });
+
+    if (!query) return matches;
+
+    // Rank by match quality so the intended product surfaces first. This is a
+    // display ordering only — it never merges or renames anything.
+    return matches
+      .map(r => ({
+        r,
+        score: fuzzyScoreAny(query, [
+          r.description,
+          r.product_code,
+          showVendor ? r.vendor_name : null,
+        ]),
+      }))
+      .filter(x => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(x => x.r);
   }, [rows, search, chips, showVendor, hasMounted]);
 
   // -------------------------------------------------------------------- sort
   const sorted = useMemo(() => {
+    // A search query supplies its own relevance ordering; re-sorting by a
+    // column would bury the best match.
+    if (search.trim()) return filtered;
     if (sort.length === 0) return filtered;
     const copy = [...filtered];
     copy.sort((a, b) => {
@@ -225,7 +272,7 @@ export function ProductsView({
       return 0;
     });
     return copy;
-  }, [filtered, sort]);
+  }, [filtered, sort, search]);
 
   const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount);
@@ -236,10 +283,6 @@ export function ProductsView({
     sort,
     onSortChange: next => setSort([...next] as SortState),
   });
-  const stickyColumns = useTableStickyColumns<ProductSummary>({
-    startKeys: ['description'],
-  });
-
   const columns = useMemo<TableColumn<ProductSummary>[]>(() => {
     const cols: TableColumn<ProductSummary>[] = [
       {
@@ -247,14 +290,30 @@ export function ProductsView({
         header: 'Description',
         width: proportional(3),
         sortable: true,
+        // A ghost Button was wrong here: buttons size to their content, so a
+        // 45-character Signify description overflowed the column and collided
+        // with the next cell.
+        //
+        // Link's own `maxLines` does not help either: it clamps the inner Text,
+        // but the anchor itself renders as inline-flex with overflow:visible, so
+        // the clamp box just grows with the content. The `<td>` is already
+        // overflow:hidden / white-space:nowrap under table-layout:fixed, so the
+        // anchor only needs to become a block that participates in that
+        // clipping. Structural properties only — no colour, size or spacing here.
         renderCell: (row: ProductSummary) => (
-          <Button
-            label={row.description}
-            variant="ghost"
-            size="sm"
-            onClick={() => router.push(`/products/${row.product_id}`)}
+          <Link
+            as={NextLink}
+            href={`/products/${row.product_id}`}
             tooltip={row.description}
-          />
+            style={{
+              display: 'block',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {row.description}
+          </Link>
         ),
       },
       {
@@ -293,7 +352,7 @@ export function ProductsView({
         align: 'end',
         sortable: true,
         renderCell: (row: ProductSummary) => (
-          <Text type="body" weight="medium">
+          <Text type="body" weight="medium" hasTabularNumbers>
             {inr(row.current_price)}
           </Text>
         ),
@@ -327,19 +386,31 @@ export function ProductsView({
         align: 'end',
         sortable: true,
         renderCell: (row: ProductSummary) => (
-          <Text type="body">{row.entry_count}</Text>
+          <Text type="body" hasTabularNumbers>
+            {row.entry_count}
+          </Text>
         ),
       },
       {
         key: 'sparkline',
         header: 'Price trend',
         width: pixel(150),
-        renderCell: (row: ProductSummary) => <Sparkline points={row.sparkline} />,
+        renderCell: (row: ProductSummary) => (
+          <Sparkline
+            points={row.sparkline}
+            label={`${row.description} price trend`}
+          />
+        ),
       },
     );
 
-    return cols;
-  }, [showVendor, router, load, hasMounted]);
+    // Shed the columns a pricing decision rarely needs before the table is
+    // forced into horizontal scrolling. Entries goes first, then Product code
+    // (still editable from the detail page).
+    return isWide
+      ? cols
+      : cols.filter(c => c.key !== 'entry_count' && c.key !== 'product_code');
+  }, [showVendor, load, hasMounted, isWide]);
 
   const columnResize = useTableColumnResize<ProductSummary>({
     columnWidths,
@@ -363,7 +434,7 @@ export function ProductsView({
         height="fill"
       header={
         <LayoutHeader hasDivider>
-          <VStack gap={3} padding={3}>
+          <VStack gap={isTableLayout ? 3 : 2} padding={isTableLayout ? 3 : 2}>
             <HStack gap={2} vAlign="center">
               <StackItem size="fill">
                 <VStack gap={0.5}>
@@ -380,21 +451,39 @@ export function ProductsView({
               <Button
                 label="Add product"
                 variant="primary"
+                // Icon-only on narrow screens: the title already says
+                // "Products", so the word is redundant and the space is not.
+                isIconOnly={!isTableLayout}
                 icon={<PlusIcon width={16} height={16} />}
                 onClick={() => setIsDialogOpen(true)}
               />
             </HStack>
 
-            <HStack gap={2} vAlign="end" wrap="wrap">
-              <SearchField value={search} onChange={setSearch} />
-              <DateRangeInput
-                label="Purchase date range"
-                value={range}
-                onChange={setRange}
-                presets={RANGE_PRESETS}
-                placeholder="All time"
-                size="md"
-              />
+            {/* The toolbar stacks below the table breakpoint and its controls
+                go full-width — side-by-side inputs at 390px leave each one too
+                narrow to read its own placeholder. */}
+            <Stack
+              direction={isTableLayout ? 'horizontal' : 'vertical'}
+              gap={2}
+              vAlign={isTableLayout ? 'end' : undefined}
+              wrap={isTableLayout ? 'wrap' : undefined}
+            >
+              <StackItem size={isTableLayout ? undefined : 'fill'}>
+                <SearchField value={search} onChange={setSearch} />
+              </StackItem>
+              <StackItem size={isTableLayout ? undefined : 'fill'}>
+                <DateRangeInput
+                  label="Purchase date range"
+                  isLabelHidden={!isTableLayout}
+                  value={range}
+                  onChange={setRange}
+                  presets={RANGE_PRESETS}
+                  placeholder="All time"
+                  size="md"
+                />
+              </StackItem>
+              {/* OverflowList would hide chips behind a "+2" affordance; on a
+                  work queue every chip should stay reachable, so they wrap. */}
               <ToggleButtonGroup
                 label="Quick filters"
                 type="multiple"
@@ -406,10 +495,14 @@ export function ProductsView({
                 }}
               >
                 {(Object.keys(CHIP_LABEL) as Chip[]).map(chip => (
-                  <ToggleButton key={chip} value={chip} label={CHIP_LABEL[chip]} />
+                  <ToggleButton
+                    key={chip}
+                    value={chip}
+                    label={isTableLayout ? CHIP_LABEL[chip] : CHIP_LABEL_SHORT[chip]}
+                  />
                 ))}
               </ToggleButtonGroup>
-            </HStack>
+            </Stack>
 
             {error ? (
               <Banner
@@ -456,7 +549,7 @@ export function ProductsView({
                 )
               }
             />
-          ) : (
+          ) : isTableLayout ? (
             <Table<ProductSummary>
               data={pageRows}
               columns={columns}
@@ -465,8 +558,10 @@ export function ProductsView({
               dividers="rows"
               hasHover
               textOverflow="truncate"
-              plugins={{sortable, stickyColumns, columnResize}}
+              plugins={{sortable, columnResize}}
             />
+          ) : (
+            <ProductRows rows={pageRows} />
           )}
         </LayoutContent>
       }
@@ -492,6 +587,11 @@ export function ProductsView({
           isOpen
           onClose={() => setIsDialogOpen(false)}
           vendors={vendors}
+          existing={rows.map(r => ({
+            id: r.product_id,
+            description: r.description,
+            product_code: r.product_code,
+          }))}
           onSaved={async id => {
             await load();
             if (id) router.push(`/products/${id}`);
